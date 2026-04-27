@@ -15,7 +15,7 @@ const nextConfig = {
 }
 
 export default withStrapiTypes({
-    strapiUrl: process.env.STRAPI_URL ?? 'http://localhost:1337',
+    strapiUrl: process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337',
     token: process.env.STRAPI_TOKEN,
 })(nextConfig)
 ```
@@ -50,7 +50,18 @@ export default withStrapiTypes({
 })(nextConfig)
 ```
 
-Your `tsconfig.json` needs `moduleResolution: "bundler"` or `"nodenext"` so `.js`-extension imports inside the generated client resolve to `.ts` source (the Next.js default already satisfies this).
+Then import from `@/strapi` (the `create-next-app` default `@/*` → `./src/*` path alias maps it to your output dir):
+
+```ts
+import { StrapiClient } from '@/strapi'
+
+const strapi = new StrapiClient({
+    baseURL: process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337',
+    token: process.env.STRAPI_TOKEN,
+})
+```
+
+Your `tsconfig.json` needs `moduleResolution: "bundler"` (the Next.js default) so the extensionless local imports inside the generated client resolve.
 
 ::: tip
 This replaces the need to run `strapi-types watch` or `strapi-types generate` manually. The wrapper handles everything.
@@ -160,10 +171,10 @@ In a Next.js App Router Server Component:
 
 ```tsx
 // app/articles/page.tsx
-import { StrapiClient } from '@/strapi'
+import { StrapiClient } from 'strapi-typed-client'
 
 const strapi = new StrapiClient({
-    baseURL: process.env.STRAPI_URL!,
+    baseURL: process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337',
     token: process.env.STRAPI_TOKEN,
 })
 
@@ -198,11 +209,11 @@ Use the client in Server Actions for mutations:
 // app/articles/actions.ts
 'use server'
 
-import { StrapiClient } from '@/strapi'
+import { StrapiClient } from 'strapi-typed-client'
 import { revalidateTag } from 'next/cache'
 
 const strapi = new StrapiClient({
-    baseURL: process.env.STRAPI_URL!,
+    baseURL: process.env.NEXT_PUBLIC_STRAPI_URL ?? 'http://localhost:1337',
     token: process.env.STRAPI_TOKEN,
 })
 
