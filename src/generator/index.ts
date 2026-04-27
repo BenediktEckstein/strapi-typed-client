@@ -10,6 +10,13 @@ import type {
     ExtraControllerType,
 } from '../shared/endpoint-types.js'
 
+function stripLocalJsExtensions(source: string): string {
+    return source.replace(
+        /(from\s+['"]|export\s+\*\s+from\s+['"])(\.[^'"]*)\.js(['"])/g,
+        '$1$2$3',
+    )
+}
+
 export class Generator {
     private outputDir: string
     private typesGenerator: TypesGenerator
@@ -54,13 +61,14 @@ export class Generator {
 
         if (format === 'ts') {
             // Write raw TypeScript for consumers that compile sources
-            // themselves (monorepos). tsc in the consumer project resolves
-            // the .js-extension imports back to .ts source under
-            // moduleResolution: "bundler" | "nodenext" | "node16".
+            // themselves (monorepos). Strip `.js` extensions from local
+            // relative imports first: tsc under moduleResolution "bundler"
+            // accepts them (resolves .js → .ts), but Turbopack (Next 16)
+            // doesn't, breaking `next build`.
             for (const [fileName, data] of Object.entries(files)) {
                 fs.writeFileSync(
                     path.join(this.outputDir, fileName),
-                    data,
+                    stripLocalJsExtensions(data),
                     'utf-8',
                 )
             }
