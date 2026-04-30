@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ClientGenerator } from '../../../src/generator/client-generator.js'
 import type { ParsedSchema } from '../../../src/schema-types.js'
 import type { ParsedEndpoint } from '../../../src/shared/endpoint-types.js'
@@ -188,6 +188,21 @@ describe('ClientGenerator', () => {
         })
         it('should generate QueryParams with status parameter for publication state', () => {
             expect(output).toContain("status?: 'draft' | 'published'")
+        })
+        it('should generate UploadQueryParams with flat start/limit (not pagination)', () => {
+            expect(output).toContain('export interface UploadQueryParams')
+            expect(output).toContain('start?: number')
+            expect(output).toContain('limit?: number')
+            // upload plugin doesn't accept pagination[page]/pageSize — make
+            // sure the interface doesn't expose a misleading `pagination`
+            // property (JSDoc above may mention the word, but body must not
+            // declare it).
+            const ifaceStart = output.indexOf(
+                'export interface UploadQueryParams {',
+            )
+            const ifaceEnd = output.indexOf('}', ifaceStart) + 1
+            const ifaceBody = output.slice(ifaceStart, ifaceEnd)
+            expect(ifaceBody).not.toMatch(/pagination\??\s*:/)
         })
         it('should generate NextOptions interface', () => {
             expect(output).toContain('export interface NextOptions')
@@ -635,6 +650,72 @@ describe('ClientGenerator', () => {
             expect(clientSection).toContain(
                 'this.usersPermissionsPermissions = new UsersPermissionsPermissionsAPI(this.config)',
             )
+        })
+    })
+
+    describe('Plugin APIs (registry-driven)', () => {
+        afterEach(() => {
+            vi.restoreAllMocks()
+        })
+
+        it('emits UploadAPI class in the generated output', () => {
+            expect(output).toContain('class UploadAPI extends BaseAPI')
+        })
+
+        it('declares `upload: UploadAPI` on StrapiClient', () => {
+            const clientSection = output.slice(
+                output.indexOf('export class StrapiClient'),
+            )
+            expect(clientSection).toContain('upload: UploadAPI')
+        })
+
+        it('initializes `this.upload = new UploadAPI(this.config)`', () => {
+            const clientSection = output.slice(
+                output.indexOf('export class StrapiClient'),
+            )
+            expect(clientSection).toContain(
+                'this.upload = new UploadAPI(this.config)',
+            )
+        })
+
+        it('skips built-in upload registry entry when user has a custom standalone `upload` controller', () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+            const customUploadEndpoint: ParsedEndpoint = {
+                method: 'POST',
+                path: '/upload/process',
+                handler: 'api::upload.upload.process',
+                controller: 'upload',
+                action: 'process',
+            }
+
+            const result = new ClientGenerator().generate(mockSchema, [
+                customUploadEndpoint,
+            ])
+            const clientSection = result.slice(
+                result.indexOf('export class StrapiClient'),
+            )
+
+            // Our registry-driven block should be absent — the marker comment
+            // and the dedicated init block are emitted only when activePlugins
+            // is non-empty.
+            expect(clientSection).not.toContain(
+                '// Plugin APIs (registry-driven)',
+            )
+            expect(clientSection).not.toContain('// Initialize plugin APIs')
+
+            // Warning should be emitted
+            expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining("Custom 'upload' controller detected"),
+            )
+
+            // The registry-driven UploadAPI class should NOT be emitted —
+            // the user's standalone class (also named UploadAPI by
+            // customApiGenerator) takes over completely. We assert that the
+            // class declaration appears only once across the whole output.
+            const uploadClassDeclarations =
+                result.match(/^class UploadAPI extends BaseAPI/gm) ?? []
+            expect(uploadClassDeclarations.length).toBe(1)
         })
     })
 })

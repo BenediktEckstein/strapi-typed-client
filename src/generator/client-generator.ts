@@ -6,6 +6,8 @@ import { ParsedSchema, ContentType } from '../schema-types.js'
 import { AuthApiGenerator } from './auth-api-generator.js'
 import type { ParsedRoute, ParsedRoutes } from '../shared/route-types.js'
 import { CustomApiGenerator } from './custom-api-generator.js'
+import { PluginApiGenerator } from './plugin-api-generator.js'
+import { PLUGIN_REGISTRY } from './plugin-registry.js'
 import { toCamelCase, toPascalCase } from '../shared/index.js'
 import type {
     ParsedEndpoint,
@@ -41,10 +43,12 @@ const STRINGIFY_QUERY_SOURCE = loadStringifyQuerySource()
 export class ClientGenerator {
     private authApiGenerator: AuthApiGenerator
     private customApiGenerator: CustomApiGenerator
+    private pluginApiGenerator: PluginApiGenerator
 
     constructor() {
         this.authApiGenerator = new AuthApiGenerator()
         this.customApiGenerator = new CustomApiGenerator()
+        this.pluginApiGenerator = new PluginApiGenerator()
     }
 
     generate(
@@ -114,8 +118,18 @@ export class ClientGenerator {
             this.authApiGenerator.generateAuthApiClass(authRoutes, userRoutes),
         )
 
+        // Plugin API classes (registry-driven: upload, etc.) — filter out
+        // entries colliding with a user-defined standalone controller so
+        // that the user's custom code wins and we don't emit duplicates.
+        const activePlugins = this.computeActivePlugins(schema, parsedRoutes)
+        sf.addStatements(
+            this.pluginApiGenerator.generateAllPluginClasses(activePlugins),
+        )
+
         // Main StrapiClient class
-        sf.addStatements(this.generateStrapiClient(schema, parsedRoutes))
+        sf.addStatements(
+            this.generateStrapiClient(schema, parsedRoutes, activePlugins),
+        )
 
         return sf.getFullText()
     }
@@ -268,6 +282,55 @@ import type { ${filterImports.join(', ')} } from './types.js'`
                     name: 'status',
                     type: "'draft' | 'published'",
                     hasQuestionToken: true,
+                },
+            ],
+        })
+
+        // UploadQueryParams interface — the upload plugin predates Strapi v5's
+        // document model and uses flat `start`/`limit` for pagination instead
+        // of `pagination[page]`/`pagination[pageSize]`. `filters` and `sort`
+        // do follow the v5 conventions.
+        sf.addInterface({
+            name: 'UploadQueryParams',
+            isExported: true,
+            docs: [
+                "Query params for the upload plugin's content-API.\n\n" +
+                    'NOTE: Strapi v5 upload plugin uses flat `start`/`limit` for\n' +
+                    'pagination — `pagination[page]`/`pagination[pageSize]` are\n' +
+                    'silently ignored. `filters` and `sort` follow the standard\n' +
+                    'Strapi v5 syntax.',
+            ],
+            properties: [
+                {
+                    name: 'filters',
+                    type: 'Record<string, any>',
+                    hasQuestionToken: true,
+                },
+                {
+                    name: 'sort',
+                    type: 'StrapiSortOption<MediaFile> | StrapiSortOption<MediaFile>[]',
+                    hasQuestionToken: true,
+                },
+                {
+                    name: 'fields',
+                    type: "(Exclude<keyof MediaFile & string, '__typename'>)[]",
+                    hasQuestionToken: true,
+                },
+                {
+                    name: 'start',
+                    type: 'number',
+                    hasQuestionToken: true,
+                    docs: [
+                        'Offset (0-based). Upload plugin uses flat `start`, not `pagination[start]`.',
+                    ],
+                },
+                {
+                    name: 'limit',
+                    type: 'number',
+                    hasQuestionToken: true,
+                    docs: [
+                        'Page size. Upload plugin uses flat `limit`, not `pagination[pageSize]`.',
+                    ],
                 },
             ],
         })
@@ -954,9 +1017,38 @@ ${customMethods}
         return `<${contentType.cleanName}, ${contentType.cleanName}Input, ${contentType.cleanName}Filters>`
     }
 
+    /**
+     * Compute which entries of `PLUGIN_REGISTRY` should be active for the
+     * current generation. An entry is skipped if the user has a custom
+     * standalone controller that resolves to the same property name —
+     * avoiding both class-name and StrapiClient property collisions. A
+     * single warning per skipped entry is logged.
+     */
+    private computeActivePlugins(
+        schema: ParsedSchema,
+        parsedRoutes?: ParsedRoutes,
+    ): typeof PLUGIN_REGISTRY {
+        return PLUGIN_REGISTRY.filter(contract => {
+            const collidesWithUserController =
+                parsedRoutes?.byController.has(contract.clientProperty) &&
+                !schema.contentTypes.some(
+                    ct => ct.singularName === contract.clientProperty,
+                )
+            if (collidesWithUserController) {
+                console.warn(
+                    `[strapi-types] Custom '${contract.clientProperty}' controller detected — ` +
+                        `skipping built-in ${contract.className} to avoid name collision.`,
+                )
+                return false
+            }
+            return true
+        })
+    }
+
     private generateStrapiClient(
         schema: ParsedSchema,
         parsedRoutes?: ParsedRoutes,
+        activePlugins: typeof PLUGIN_REGISTRY = PLUGIN_REGISTRY,
     ): string {
         // Build property declarations
         const propertyDeclarations = schema.contentTypes
@@ -1029,13 +1121,34 @@ ${customMethods}
         // Build standalone API initializations
         const standaloneInits = this.buildStandaloneInits(schema, parsedRoutes)
 
+        // Plugin APIs from PLUGIN_REGISTRY — `activePlugins` is precomputed
+        // by the caller (see computeActivePlugins) so the same filter is
+        // applied to both class emission and StrapiClient wiring.
+        const pluginDeclarations = activePlugins
+            .map(c => `  ${c.clientProperty}: ${c.className}`)
+            .join('\n')
+
+        const pluginInits = activePlugins
+            .map(
+                c =>
+                    `    this.${c.clientProperty} = new ${c.className}(this.config)`,
+            )
+            .join('\n')
+
+        const pluginDeclarationsBlock = pluginDeclarations
+            ? `\n  // Plugin APIs (registry-driven)\n${pluginDeclarations}\n`
+            : ''
+        const pluginInitsBlock = pluginInits
+            ? `\n    // Initialize plugin APIs\n${pluginInits}\n`
+            : ''
+
         return `// Main Strapi client
 export class StrapiClient {
   private config: StrapiClientConfig
 
   // Auth API for users-permissions plugin
   authentication: AuthAPI
-
+${pluginDeclarationsBlock}
 ${propertyDeclarations}
 ${standaloneDeclarations}
   constructor(config: StrapiClientConfig) {
@@ -1043,7 +1156,7 @@ ${standaloneDeclarations}
 
     // Initialize Auth API
     this.authentication = new AuthAPI(this.config)
-
+${pluginInitsBlock}
 ${propertyInits}
 ${standaloneInits}
     // Auto-validate schema in development mode

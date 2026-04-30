@@ -146,6 +146,110 @@ await strapi.articles.update('abc123', {
 })
 ```
 
+## Upload API
+
+Strapi v5 ships with a built-in upload plugin. The client exposes it via `client.upload`, fully typed and using the same auth pipeline, baseURL, error handling, and Next.js cache integration as the rest of the client.
+
+### Methods
+
+| Method             | Endpoint                       | Returns       |
+| ------------------ | ------------------------------ | ------------- |
+| `upload(formData)` | `POST /api/upload`             | `MediaFile[]` |
+| `find(params?)`    | `GET /api/upload/files`        | `MediaFile[]` |
+| `findOne(id)`      | `GET /api/upload/files/:id`    | `MediaFile`   |
+| `destroy(id)`      | `DELETE /api/upload/files/:id` | `MediaFile`   |
+
+### Uploading files
+
+Construct a `FormData` with the field name `files` (the Strapi convention) and pass it to `upload()`:
+
+```ts
+// Web
+const input = document.querySelector<HTMLInputElement>('#picker')!
+const formData = new FormData()
+for (const file of input.files ?? []) {
+    formData.append('files', file)
+}
+const uploaded = await client.upload.upload(formData)
+// uploaded is MediaFile[]
+```
+
+```ts
+// React Native
+const formData = new FormData()
+formData.append('files', {
+    uri: localUri,
+    name: 'photo.jpg',
+    type: 'image/jpeg',
+} as any)
+const [file] = await client.upload.upload(formData)
+```
+
+You can also attach uploaded files directly to an existing entry by adding the standard Strapi fields to the same FormData:
+
+```ts
+formData.append('ref', 'api::article.article')
+formData.append('refId', String(articleId))
+formData.append('field', 'cover')
+await client.upload.upload(formData)
+```
+
+### Listing files
+
+`find()` accepts an `UploadQueryParams` shape with `filters`, `sort`, `fields`, and **flat `start`/`limit`** for pagination:
+
+```ts
+const files = await client.upload.find({
+    sort: 'createdAt:desc',
+    limit: 20,
+    start: 0,
+    filters: { mime: { $contains: 'image/' } },
+})
+```
+
+::: warning Pagination quirk
+The upload plugin pre-dates Strapi v5's document model and **uses flat `start`/`limit` instead of `pagination[page]`/`pagination[pageSize]`**. The `UploadQueryParams` type reflects this — TypeScript will not let you pass `pagination` here. If you copy a snippet from a collection endpoint, you'll need to convert it.
+:::
+
+::: warning Response shape
+Unlike collection endpoints, the upload plugin returns a flat array — there is no `{ data, meta }` envelope. `client.upload.find()` resolves to `MediaFile[]` directly.
+:::
+
+### Reading and deleting a single file
+
+```ts
+const file = await client.upload.findOne(42)
+console.log(file.url)
+
+const deleted = await client.upload.destroy(42)
+// `deleted` is the MediaFile that was just removed
+```
+
+::: warning Numeric ids
+Files use a numeric `id`, not a `documentId` — this is a quirk of the upload plugin (it pre-dates Strapi's document model). Do not pass strings:
+
+```ts
+client.upload.findOne(42) // ✅ number
+client.upload.findOne('42') // ❌ type error
+```
+
+:::
+
+### Error handling
+
+Upload methods throw the same `StrapiError` / `StrapiConnectionError` as the rest of the client. Auth (Bearer token), timeout, and Next.js cache options are all inherited.
+
+```ts
+try {
+    await client.upload.destroy(42)
+} catch (err) {
+    if (err instanceof StrapiError && err.status === 403) {
+        // missing permission to delete uploads
+    }
+    throw err
+}
+```
+
 ## BlocksContent
 
 The `BlocksContent` type represents content from Strapi's Blocks rich text editor (the v2 rich text field introduced in Strapi v5). It is a structured array of block objects.
