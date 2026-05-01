@@ -598,12 +598,21 @@ class StrapiError extends Error {
     status: number
     /** HTTP status text */
     statusText: string
-    /** Additional error details from Strapi */
-    details?: any
+    /**
+     * Strapi-side error name (e.g. "ValidationError", "PolicyError").
+     * Use as discriminator with `isStrapiErrorOf` for typed `details`.
+     */
+    errorName: StrapiErrorName
+    /** Narrow via `isStrapiErrorOf` for typed access. */
+    details?: unknown
 }
 ```
 
-The error message includes a contextual hint for common HTTP status codes:
+::: warning Note on `Error.name`
+`Error.name` is left as `"StrapiError"` so Sentry/sourcemap contracts are unchanged — the Strapi-side name lives on the new `errorName` field. Use `errorName` (not `name`) for narrowing.
+:::
+
+The error message also includes a contextual hint for common HTTP status codes:
 
 | Status | Hint                                                                                 |
 | ------ | ------------------------------------------------------------------------------------ |
@@ -612,19 +621,108 @@ The error message includes a contextual hint for common HTTP status codes:
 | 404    | This endpoint may not exist. Verify the content type is created in Strapi.           |
 | 500    | Internal Strapi error. Check Strapi server logs for details.                         |
 
+### Known error names
+
+`errorName` is typed as a literal union of Strapi v5's documented error names plus a `string` fallback for plugin or future-version errors:
+
+| `errorName`            | Default status | `details` shape                         |
+| ---------------------- | -------------- | --------------------------------------- |
+| `ValidationError`      | 400            | `{ errors: StrapiValidationIssue[] }`   |
+| `BadRequestError`      | 400            | `Record<string, unknown>`               |
+| `PaginationError`      | 400            | `Record<string, unknown>`               |
+| `UnauthorizedError`    | 401            | `undefined`                             |
+| `ForbiddenError`       | 403            | `undefined`                             |
+| `PolicyError`          | 403            | `{ policy?: string; message?: string }` |
+| `NotFoundError`        | 404            | `undefined`                             |
+| `ConflictError`        | 409            | `Record<string, unknown>`               |
+| `PayloadTooLargeError` | 413            | `undefined`                             |
+| `RateLimitError`       | 429            | `Record<string, unknown>`               |
+| `ApplicationError`     | 500            | `Record<string, unknown>`               |
+
+### Narrowing errors with `isStrapiErrorOf`
+
+Because `details` is typed as `unknown` on the class, narrow it via the `isStrapiErrorOf` type guard:
+
 ```ts
-import { StrapiError } from 'strapi-typed-client'
+import { isStrapiErrorOf } from 'strapi-typed-client'
 
 try {
     await strapi.articles.create({ title: '' })
-} catch (error) {
-    if (error instanceof StrapiError) {
-        console.log(error.status) // 400
-        console.log(error.userMessage) // "title must be at least 1 character"
-        console.log(error.details) // validation details from Strapi
+} catch (err) {
+    if (isStrapiErrorOf(err, 'ValidationError')) {
+        // err.details is `{ errors: StrapiValidationIssue[] } | undefined` —
+        // Strapi can omit details even on a ValidationError, so use
+        // optional access or a fallback.
+        for (const issue of err.details?.errors ?? []) {
+            console.log(issue.path.join('.'), issue.message)
+        }
+    }
+
+    if (isStrapiErrorOf(err, 'PolicyError')) {
+        console.warn(err.details?.policy)
+    }
+
+    if (isStrapiErrorOf(err, 'ForbiddenError')) {
+        // 403 — token lacks permission. err.details is always undefined.
+        redirectToLogin()
     }
 }
 ```
+
+For "any Strapi error" without a specific name, use `isStrapiError`:
+
+```ts
+import { isStrapiError } from 'strapi-typed-client'
+
+try {
+    /* ... */
+} catch (err) {
+    if (isStrapiError(err)) {
+        if (err.status === 401) redirectToLogin()
+    }
+}
+```
+
+### `StrapiValidationIssue`
+
+Each entry in `details.errors` for a `ValidationError`:
+
+```ts
+export interface StrapiValidationIssue {
+    /** Field path to the offending value, e.g. ["author", "email"]. */
+    path: string[]
+    message: string
+    /** The Yup validator name, e.g. "required". */
+    name: string
+}
+```
+
+This is a stable export — perfect for mapping backend validation back to form fields:
+
+```ts
+const fieldErrors: Record<string, string> = {}
+if (isStrapiErrorOf(err, 'ValidationError')) {
+    for (const issue of err.details?.errors ?? []) {
+        fieldErrors[issue.path.join('.')] = issue.message
+    }
+}
+```
+
+### Migration from `details: any`
+
+Earlier versions exposed `details` as `any`. The new `unknown` type is stricter — direct property access stops compiling without narrowing:
+
+```ts
+// Before — compiled but unsafe:
+err.details.errors[0].path
+
+// After — must narrow:
+if (isStrapiErrorOf(err, 'ValidationError')) {
+    err.details.errors[0].path
+}
+```
+
+Runtime behavior is unchanged.
 
 ## StrapiConnectionError
 

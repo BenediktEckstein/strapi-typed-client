@@ -126,12 +126,75 @@ describe('ClientGenerator', () => {
             expect(output).toContain('data: T')
             expect(output).toContain('pagination?')
         })
-        it('should generate StrapiError class', () => {
+        it('should generate StrapiError class with errorName + unknown details', () => {
             expect(output).toContain('export class StrapiError extends Error')
             expect(output).toContain('userMessage: string')
             expect(output).toContain('status: number')
             expect(output).toContain('statusText: string')
-            expect(output).toContain('details?: any')
+            // details is now `unknown` (was `any`) — narrowed via isStrapiErrorOf
+            expect(output).toContain('details?: unknown')
+            // discriminator field for narrowing
+            expect(output).toContain('errorName: StrapiErrorName')
+            // Error.name remains "StrapiError" for sentry/sourcemap contracts
+            expect(output).toContain('this.name = "StrapiError"')
+            // constructor stores the new errorName
+            expect(output).toContain('this.errorName = errorName')
+        })
+
+        it('should generate StrapiValidationIssue interface', () => {
+            expect(output).toContain('export interface StrapiValidationIssue')
+            expect(output).toContain('path: string[]')
+            expect(output).toContain('message: string')
+        })
+
+        it('should generate StrapiErrorName union including known names + string fallback', () => {
+            expect(output).toContain('export type StrapiErrorName')
+            expect(output).toContain("'ValidationError'")
+            expect(output).toContain("'PolicyError'")
+            expect(output).toContain("'NotFoundError'")
+            // string fallback for unknown plugin/future error names
+            expect(output).toContain('(string & {})')
+        })
+
+        it('should generate StrapiErrorDetailsMap mapping known names to detail shapes', () => {
+            expect(output).toContain('export type StrapiErrorDetailsMap')
+            expect(output).toContain(
+                'ValidationError: { errors: StrapiValidationIssue[] }',
+            )
+            expect(output).toContain(
+                'PolicyError: { policy?: string; message?: string }',
+            )
+            // stateless errors map to undefined for cleaner DX
+            expect(output).toContain('NotFoundError: undefined')
+            expect(output).toContain('UnauthorizedError: undefined')
+        })
+
+        it('should generate UnknownStrapiErrorDetails interface for fallback', () => {
+            expect(output).toContain(
+                'export interface UnknownStrapiErrorDetails',
+            )
+            expect(output).toContain('errorName: string')
+        })
+
+        it('should generate isStrapiError and isStrapiErrorOf type guards', () => {
+            expect(output).toContain(
+                'export function isStrapiError(err: unknown): err is StrapiError',
+            )
+            expect(output).toContain(
+                'export function isStrapiErrorOf<N extends keyof StrapiErrorDetailsMap>',
+            )
+            expect(output).toContain(
+                'err is StrapiError & { errorName: N; details: StrapiErrorDetailsMap[N] }',
+            )
+        })
+
+        it('should propagate Strapi-side error name into the StrapiError constructor', () => {
+            expect(output).toContain(
+                "errorData.error?.details,\n        errorData.error?.name ?? 'UnknownError'",
+            )
+            expect(output).toContain(
+                "response.statusText,\n          undefined,\n          'UnknownError'",
+            )
         })
         it('should generate StrapiConnectionError class', () => {
             expect(output).toContain(

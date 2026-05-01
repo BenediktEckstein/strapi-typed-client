@@ -8,6 +8,7 @@ import type { ParsedRoute, ParsedRoutes } from '../shared/route-types.js'
 import { CustomApiGenerator } from './custom-api-generator.js'
 import { PluginApiGenerator } from './plugin-api-generator.js'
 import { PLUGIN_REGISTRY } from './plugin-registry.js'
+import { STRAPI_ERROR_REGISTRY } from './strapi-error-registry.js'
 import { toCamelCase, toPascalCase } from '../shared/index.js'
 import type {
     ParsedEndpoint,
@@ -221,11 +222,19 @@ import type { ${filterImports.join(', ')} } from './types.js'`
             ],
         })
 
+        // StrapiValidationIssue + error name/details types (registry-driven)
+        this.addStrapiValidationIssueInterface(sf)
+        this.addStrapiErrorTypes(sf)
+
         // StrapiError class
         this.addStrapiErrorClass(sf)
 
         // StrapiConnectionError class
         this.addStrapiConnectionErrorClass(sf)
+
+        // Type guards for StrapiError narrowing (must come AFTER the class
+        // declaration so the guards can reference StrapiError).
+        this.addStrapiErrorTypeGuards(sf)
 
         // BaseAPI class (complex — static block)
         sf.addStatements(this.generateBaseAPIClass())
@@ -430,11 +439,101 @@ import type { ${filterImports.join(', ')} } from './types.js'`
         })
     }
 
+    private addStrapiValidationIssueInterface(sf: SourceFile): void {
+        sf.addInterface({
+            name: 'StrapiValidationIssue',
+            isExported: true,
+            docs: [
+                'A single validation issue inside a `ValidationError`.\n' +
+                    'Mirrors the Yup-style errors Strapi propagates from schema validation.',
+            ],
+            properties: [
+                {
+                    name: 'path',
+                    type: 'string[]',
+                    docs: [
+                        'Field path to the offending value (e.g. ["author", "email"]).',
+                    ],
+                },
+                { name: 'message', type: 'string' },
+                {
+                    name: 'name',
+                    type: 'string',
+                    docs: ['The Yup validator name (e.g. "required").'],
+                },
+            ],
+        })
+    }
+
+    private addStrapiErrorTypes(sf: SourceFile): void {
+        const names = STRAPI_ERROR_REGISTRY.map(c => `'${c.errorName}'`)
+        const namedUnion = names.join(' | ')
+
+        sf.addTypeAlias({
+            name: 'StrapiErrorName',
+            isExported: true,
+            docs: [
+                'Known Strapi v5 error names. Other strings are still accepted at\n' +
+                    'runtime via the `(string & {})` fallback so plugin or future-version\n' +
+                    'errors are not lost.',
+            ],
+            type: `${namedUnion} | (string & {})`,
+        })
+
+        const mapEntries = STRAPI_ERROR_REGISTRY.map(
+            c => `  ${c.errorName}: ${c.detailsType}`,
+        ).join('\n')
+
+        sf.addTypeAlias({
+            name: 'StrapiErrorDetailsMap',
+            isExported: true,
+            docs: [
+                'Maps each known `StrapiErrorName` to the shape of its `details`\n' +
+                    'payload. Used by `isStrapiErrorOf` to narrow `details` after the\n' +
+                    'discriminator check. Wrapped in `Partial` because Strapi may\n' +
+                    'omit `details` even when the error name is known.',
+            ],
+            type: `Partial<{\n${mapEntries}\n}>`,
+        })
+
+        sf.addInterface({
+            name: 'UnknownStrapiErrorDetails',
+            isExported: true,
+            docs: [
+                'Fallback shape when `errorName` is not in `StrapiErrorDetailsMap`\n' +
+                    '(e.g. 3rd-party plugin errors or Strapi versions newer than this client).',
+            ],
+            properties: [
+                { name: 'errorName', type: 'string' },
+                {
+                    name: 'details',
+                    type: 'Record<string, unknown>',
+                    hasQuestionToken: true,
+                },
+            ],
+        })
+    }
+
     private addStrapiErrorClass(sf: SourceFile): void {
         sf.addClass({
             name: 'StrapiError',
             isExported: true,
-            docs: ['Custom error class for Strapi API errors'],
+            docs: [
+                'Error thrown for non-2xx responses from Strapi.\n\n' +
+                    'Use `isStrapiErrorOf(err, "ValidationError")` (or any other\n' +
+                    'name) to narrow `details` to its typed shape.\n\n' +
+                    '@example\n' +
+                    '```ts\n' +
+                    "try { await strapi.articles.create({ title: '' }) }\n" +
+                    'catch (e) {\n' +
+                    "  if (isStrapiErrorOf(e, 'ValidationError')) {\n" +
+                    '    for (const issue of e.details?.errors ?? []) {\n' +
+                    "      console.log(issue.path.join('.'), issue.message)\n" +
+                    '    }\n' +
+                    '  }\n' +
+                    '}\n' +
+                    '```',
+            ],
             extends: 'Error',
             properties: [
                 {
@@ -453,10 +552,22 @@ import type { ${filterImports.join(', ')} } from './types.js'`
                     docs: ['HTTP status text'],
                 },
                 {
+                    name: 'errorName',
+                    type: 'StrapiErrorName',
+                    docs: [
+                        'Strapi-side error name (e.g. "ValidationError", "PolicyError").\n' +
+                            'Use as discriminator with `isStrapiErrorOf`. `Error.name` itself\n' +
+                            'remains "StrapiError" so Sentry/sourcemap contracts are unchanged.',
+                    ],
+                },
+                {
                     name: 'details',
-                    type: 'any',
+                    type: 'unknown',
                     hasQuestionToken: true,
-                    docs: ['Additional error details from Strapi'],
+                    docs: [
+                        'Additional error details from Strapi. Typed as `unknown` —\n' +
+                            'narrow via `isStrapiErrorOf` for typed access.',
+                    ],
                 },
             ],
             ctors: [
@@ -468,8 +579,13 @@ import type { ${filterImports.join(', ')} } from './types.js'`
                         { name: 'statusText', type: 'string' },
                         {
                             name: 'details',
-                            type: 'any',
+                            type: 'unknown',
                             hasQuestionToken: true,
+                        },
+                        {
+                            name: 'errorName',
+                            type: 'StrapiErrorName',
+                            initializer: "'UnknownError'",
                         },
                     ],
                     statements: [
@@ -478,11 +594,39 @@ import type { ${filterImports.join(', ')} } from './types.js'`
                         'this.userMessage = userMessage',
                         'this.status = status',
                         'this.statusText = statusText',
+                        'this.errorName = errorName',
                         'this.details = details',
                     ],
                 },
             ],
         })
+    }
+
+    private addStrapiErrorTypeGuards(sf: SourceFile): void {
+        sf.addStatements(`
+/**
+ * Type guard: is the value a StrapiError instance?
+ */
+export function isStrapiError(err: unknown): err is StrapiError {
+    return err instanceof StrapiError
+}
+
+/**
+ * Type guard that narrows both \`errorName\` and \`details\` for a specific
+ * Strapi error type.
+ *
+ * @example
+ * if (isStrapiErrorOf(err, 'ValidationError')) {
+ *   err.details?.errors?.[0]?.path // string[] | undefined
+ * }
+ */
+export function isStrapiErrorOf<N extends keyof StrapiErrorDetailsMap>(
+    err: unknown,
+    name: N,
+): err is StrapiError & { errorName: N; details: StrapiErrorDetailsMap[N] } {
+    return isStrapiError(err) && err.errorName === name
+}
+`)
     }
 
     private addStrapiConnectionErrorClass(sf: SourceFile): void {
@@ -660,7 +804,9 @@ class BaseAPI {
           \`Strapi returned HTML instead of JSON. Your baseURL may point to the wrong server. URL: \${url}\`,
           'Unexpected HTML response from server',
           response.status,
-          response.statusText
+          response.statusText,
+          undefined,
+          'UnknownError'
         )
       }
 
@@ -673,7 +819,8 @@ class BaseAPI {
         userMessage,
         response.status,
         response.statusText,
-        errorData.error?.details
+        errorData.error?.details,
+        errorData.error?.name ?? 'UnknownError'
       )
     }
 
