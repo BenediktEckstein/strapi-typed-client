@@ -569,6 +569,55 @@ describe('ClientGenerator', () => {
             expect(result).not.toContain('campuses:')
             expect(result).not.toContain("'campuses'")
         })
+
+        it('should strip pluralName (not `controller + "s"`) from custom-route paths', () => {
+            // Regression for #48: custom endpoints on collections whose
+            // pluralName differs from `singularName + "s"` (irregular English
+            // plurals, non-English names like the Portuguese pesquisador →
+            // pesquisadores) were generating URLs with a leftover suffix
+            // (`/api/pesquisadoreses/<action>`) because the path-stripping
+            // logic naively appended `s` to the controller name.
+            const schema: ParsedSchema = {
+                contentTypes: [
+                    {
+                        name: 'ApiPesquisadorPesquisador',
+                        cleanName: 'Pesquisador',
+                        collectionName: 'pesquisadores',
+                        singularName: 'pesquisador',
+                        pluralName: 'pesquisadores',
+                        kind: 'collection',
+                        attributes: [
+                            {
+                                name: 'name',
+                                type: { kind: 'string' },
+                                required: true,
+                            },
+                        ],
+                        relations: [],
+                        media: [],
+                        components: [],
+                        dynamicZones: [],
+                    },
+                ],
+                components: [],
+            }
+            const endpoints: ParsedEndpoint[] = [
+                {
+                    method: 'POST',
+                    path: '/pesquisadores/custom-action',
+                    handler: 'api::pesquisador.pesquisador.customAction',
+                    controller: 'pesquisador',
+                    action: 'customAction',
+                },
+            ]
+            const result = new ClientGenerator().generate(schema, endpoints)
+
+            expect(result).toContain(
+                '`${this.config.baseURL}/api/${this.endpoint}/custom-action`',
+            )
+            expect(result).not.toContain('/pesquisadoreses')
+            expect(result).not.toContain('${this.endpoint}es/')
+        })
     })
 
     describe('Auth types', () => {

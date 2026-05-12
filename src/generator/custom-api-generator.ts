@@ -18,14 +18,23 @@ export class CustomApiGenerator {
      * @param controller - Controller name
      * @param routes - Routes for this controller
      * @param isStandalone - Whether this is a standalone API (no collection type)
+     * @param endpoint - The collection/single endpoint segment (pluralName for
+     *   collections, singularName for single types) — used to strip the leading
+     *   resource prefix from route paths. When omitted, falls back to naive
+     *   `controller + "s"` pluralization (kept for standalone routes only).
      */
     generateCustomMethods(
         controller: string,
         routes: ParsedRoute[],
         isStandalone: boolean = false,
+        endpoint?: string,
     ): string {
         return routes
-            .map(route => '\n' + this.generateCustomMethod(route, isStandalone))
+            .map(
+                route =>
+                    '\n' +
+                    this.generateCustomMethod(route, isStandalone, endpoint),
+            )
             .join('\n')
     }
 
@@ -49,6 +58,7 @@ export class CustomApiGenerator {
     private generateCustomMethod(
         route: ParsedRoute,
         isStandalone: boolean = false,
+        endpoint?: string,
     ): string {
         const customType = this.customTypes?.types.get(route.handler)
         const inputType = customType?.inputType || 'any'
@@ -62,7 +72,7 @@ export class CustomApiGenerator {
 
         const urlExpression = isStandalone
             ? `\`\${this.config.baseURL}/api${this.generateStandalonePathExpression(route)}\``
-            : `\`\${this.config.baseURL}/api/\${this.endpoint}${this.generatePathExpression(route)}\``
+            : `\`\${this.config.baseURL}/api/\${this.endpoint}${this.generatePathExpression(route, endpoint)}\``
 
         const bodyBlock = hasBody
             ? `    // If data is FormData, use it directly; otherwise JSON stringify
@@ -118,18 +128,39 @@ ${bodyBlock}
         return params.join(', ')
     }
 
-    private generatePathExpression(route: ParsedRoute): string {
+    private generatePathExpression(
+        route: ParsedRoute,
+        endpoint?: string,
+    ): string {
         // Convert path like '/items/:id/increment-run' to '/${id}/increment-run'
-        // Remove leading /items if it matches the controller
+        // by stripping the resource prefix that the StrapiClient base URL already
+        // contains (`${this.endpoint}`).
         let pathTemplate = route.path
 
-        // Remove controller prefix from path
-        // e.g., '/items/:id/action' -> '/:id/action'
-        const controllerPath = `/${route.controller}s` // pluralize
-        if (pathTemplate.startsWith(controllerPath)) {
-            pathTemplate = pathTemplate.substring(controllerPath.length)
-        } else if (pathTemplate.startsWith(`/${route.controller}`)) {
-            pathTemplate = pathTemplate.substring(route.controller.length + 1)
+        if (endpoint) {
+            // Use the real Strapi endpoint (pluralName for collections,
+            // singularName for single types) — handles irregular plurals and
+            // non-English names like `pesquisador`/`pesquisadores`.
+            const endpointPath = `/${endpoint}`
+            if (pathTemplate.startsWith(endpointPath)) {
+                pathTemplate = pathTemplate.substring(endpointPath.length)
+            } else if (pathTemplate.startsWith(`/${route.controller}`)) {
+                // Fallback: route declared under the singular controller name.
+                pathTemplate = pathTemplate.substring(
+                    route.controller.length + 1,
+                )
+            }
+        } else {
+            // Legacy path (no endpoint hint available) — naive English
+            // pluralization. Retained for callers that don't pass the endpoint.
+            const controllerPath = `/${route.controller}s`
+            if (pathTemplate.startsWith(controllerPath)) {
+                pathTemplate = pathTemplate.substring(controllerPath.length)
+            } else if (pathTemplate.startsWith(`/${route.controller}`)) {
+                pathTemplate = pathTemplate.substring(
+                    route.controller.length + 1,
+                )
+            }
         }
 
         // Convert :param to ${param}
