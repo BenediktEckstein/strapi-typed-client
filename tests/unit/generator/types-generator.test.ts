@@ -328,21 +328,40 @@ describe('TypesGenerator', () => {
     // Component interfaces
     // ================================================================
     describe('Component interfaces', () => {
-        it('should generate ProjectConfig component with id and __component fields', () => {
+        it('should generate ProjectConfig regular component WITHOUT __component (Strapi rejects it on regular component attributes)', () => {
             expect(output).toContain('export interface ProjectConfig {')
             expect(output).toContain('  id: number')
-            expect(output).toContain("  __component: 'project.project-config'")
             expect(output).toContain('  key: string')
             expect(output).toContain('  value: string')
+            // ProjectConfig is used as a regular component (Project.config), not in any DZ.
+            // No __component anywhere — and no Dz alias should be generated either.
+            expect(output).not.toMatch(
+                /interface ProjectConfig \{[^}]*__component/,
+            )
+            expect(output).not.toContain('export type ProjectConfigDz')
         })
 
-        it('should generate LandingHero component with only scalar fields (no media/relations in base)', () => {
+        it('should generate LandingHero base component WITHOUT __component', () => {
             expect(output).toContain('export interface LandingHero {')
             expect(output).toContain('  id: number')
-            expect(output).toContain("  __component: 'landing.hero'")
             expect(output).toContain('  title: string')
+            expect(output).not.toMatch(
+                /interface LandingHero \{[^}]*__component/,
+            )
             // Media fields are only available via GetPayload populate, not in base interface
             expect(output).not.toMatch(/interface LandingHero \{[^}]*image/)
+        })
+
+        it('should generate LandingHeroDz alias for DZ usage with __component discriminator', () => {
+            expect(output).toContain(
+                "export type LandingHeroDz = LandingHero & { __component: 'landing.hero' }",
+            )
+        })
+
+        it('should generate LandingFeatureDz alias for DZ usage with __component discriminator', () => {
+            expect(output).toContain(
+                "export type LandingFeatureDz = LandingFeature & { __component: 'landing.feature' }",
+            )
         })
     })
 
@@ -370,12 +389,32 @@ describe('TypesGenerator', () => {
             expect(output).toContain('  owner?: RelationInput')
         })
 
-        it('should generate ProjectConfigInput for component with __component', () => {
+        it('should generate ProjectConfigInput WITHOUT __component (regular component, not DZ)', () => {
             expect(output).toContain('export interface ProjectConfigInput {')
             expect(output).toContain('  id?: number')
-            expect(output).toContain("  __component: 'project.project-config'")
             expect(output).toContain('  key?: string')
             expect(output).toContain('  value?: string')
+            expect(output).not.toMatch(
+                /interface ProjectConfigInput \{[^}]*__component/,
+            )
+            expect(output).not.toContain('export type ProjectConfigDzInput')
+        })
+
+        it('should generate LandingHeroDzInput / LandingFeatureDzInput aliases for DZ payloads', () => {
+            expect(output).toContain(
+                "export type LandingHeroDzInput = LandingHeroInput & { __component: 'landing.hero' }",
+            )
+            expect(output).toContain(
+                "export type LandingFeatureDzInput = LandingFeatureInput & { __component: 'landing.feature' }",
+            )
+        })
+
+        it('ProjectInput.sections (DZ) should accept *DzInput union, not *Input', () => {
+            // After the fix, DZ inputs require __component via the *DzInput aliases.
+            // Plain *Input must NOT appear in the DZ field type.
+            expect(output).toMatch(
+                /sections\?: \(LandingHeroDzInput \| LandingFeatureDzInput\)\[\] \| null/,
+            )
         })
     })
 
@@ -514,6 +553,22 @@ describe('TypesGenerator', () => {
             expect(output).toContain(
                 'LandingFeatureGetPayload<{ populate: NestedPop }>',
             )
+        })
+
+        it('populated DZ branch must intersect GetPayload with __component to keep discriminated-union narrowing', () => {
+            expect(output).toContain(
+                "LandingFeatureGetPayload<{ populate: NestedPop }> & { __component: 'landing.feature' }",
+            )
+            expect(output).toContain(
+                "LandingHeroGetPayload<{ populate: NestedPop }> & { __component: 'landing.hero' }",
+            )
+        })
+
+        it('non-populated DZ branches should fall back to *Dz alias (already carries __component)', () => {
+            // Inside the per-field DZ branch, both the "no nested populate" and
+            // the "uid not in On" fallback must use *Dz, not the bare base type.
+            expect(output).toContain('LandingHeroDz')
+            expect(output).toContain('LandingFeatureDz')
         })
 
         it('should resolve nested populate from on discriminator for components with media', () => {

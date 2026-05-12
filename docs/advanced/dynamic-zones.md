@@ -4,7 +4,7 @@ Dynamic Zones are one of Strapi's most powerful features, allowing content edito
 
 ## Generated Types
 
-When your Strapi schema includes a Dynamic Zone field, the generator produces a union type of all possible components for that zone. Each component in the union includes a `__component` string literal field that acts as a discriminant.
+Component interfaces describe the component shape itself — they intentionally **do not** include `__component`. The discriminator belongs to the place where the component is used, not the component definition. For every component that appears in at least one Dynamic Zone, the generator emits an extra `*Dz` alias that adds the `__component` literal. Dynamic Zone fields are typed as a union of those `*Dz` aliases.
 
 For example, given a `Landing` content type with a `content` Dynamic Zone that allows `HeroBlock`, `TextBlock`, and `GalleryBlock` components:
 
@@ -12,35 +12,47 @@ For example, given a `Landing` content type with a `content` Dynamic Zone that a
 // Generated output in types.ts
 
 export interface HeroBlock {
-    __component: 'landing.hero-block'
+    id: number
     heading: string
     subheading: string | null
-    backgroundImage: StrapiMedia | null
 }
 
 export interface TextBlock {
-    __component: 'landing.text-block'
+    id: number
     body: string
     alignment: 'left' | 'center' | 'right'
 }
 
 export interface GalleryBlock {
-    __component: 'landing.gallery-block'
+    id: number
     title: string | null
-    images: StrapiMedia[]
+}
+
+export type HeroBlockDz = HeroBlock & { __component: 'landing.hero-block' }
+export type TextBlockDz = TextBlock & { __component: 'landing.text-block' }
+export type GalleryBlockDz = GalleryBlock & {
+    __component: 'landing.gallery-block'
 }
 
 export interface Landing {
     id: number
     documentId: string
     title: string
-    content: (HeroBlock | TextBlock | GalleryBlock)[] | null
     createdAt: string
     updatedAt: string
 }
 ```
 
-The Dynamic Zone field is always typed as an array of the component union, or `null` if the zone has no blocks.
+Populatable fields — media, relations, nested components — live in `LandingGetPayload` rather than the base `Landing`, so the `content` field appears on populated payloads:
+
+```typescript
+type LandingWithContent = LandingGetPayload<{ populate: { content: true } }>
+// LandingWithContent['content'] is (HeroBlockDz | TextBlockDz | GalleryBlockDz)[]
+```
+
+::: tip Why two interfaces per component?
+The same component can be used both inside a Dynamic Zone and as a regular `type: "component"` attribute. Strapi only accepts `__component` in Dynamic Zones — for regular component attributes the discriminator is invalid and triggers a 400 on write. Keeping it on a separate `*Dz` alias lets the generator give both contexts the right input/output shapes.
+:::
 
 ## Loading Dynamic Zone Content
 
@@ -151,20 +163,24 @@ Prefer `__component` checks over property checks. The `__component` field is alw
 
 ### Type guard helpers
 
-For reusable narrowing logic, create type guard functions:
+For reusable narrowing logic, create type guard functions. Use the `*Dz` alias as the predicate target so the discriminator is preserved through filtering:
 
 ```typescript
-function isHeroBlock(block: Landing['content'][number]): block is HeroBlock {
+type LandingBlock = LandingGetPayload<{
+    populate: { content: true }
+}>['content'][number]
+
+function isHeroBlock(block: LandingBlock): block is HeroBlockDz {
     return block.__component === 'landing.hero-block'
 }
 
-function isTextBlock(block: Landing['content'][number]): block is TextBlock {
+function isTextBlock(block: LandingBlock): block is TextBlockDz {
     return block.__component === 'landing.text-block'
 }
 
 // Usage
 const heroes = landing.data?.content?.filter(isHeroBlock) ?? []
-// heroes is typed as HeroBlock[]
+// heroes is typed as HeroBlockDz[]
 ```
 
 ## Rendering Dynamic Zones in React
@@ -172,12 +188,11 @@ const heroes = landing.data?.content?.filter(isHeroBlock) ?? []
 A common pattern for rendering Dynamic Zones in a frontend framework:
 
 ```tsx
-import type {
-    Landing,
-    HeroBlock,
-    TextBlock,
-    GalleryBlock,
-} from '@myapp/strapi-types'
+import type { LandingGetPayload } from '@myapp/strapi-types'
+
+type LandingBlocks = LandingGetPayload<{
+    populate: { content: true }
+}>['content']
 
 const componentMap: Record<string, React.FC<any>> = {
     'landing.hero-block': HeroSection,
@@ -185,7 +200,7 @@ const componentMap: Record<string, React.FC<any>> = {
     'landing.gallery-block': GallerySection,
 }
 
-function DynamicZone({ blocks }: { blocks: Landing['content'] }) {
+function DynamicZone({ blocks }: { blocks: LandingBlocks }) {
     if (!blocks) return null
 
     return (
@@ -202,7 +217,7 @@ function DynamicZone({ blocks }: { blocks: Landing['content'] }) {
 
 ## Input Types for Dynamic Zones
 
-When creating or updating entries with Dynamic Zone content, you must include the `__component` field in each block so Strapi knows which component type to use:
+The generator emits `*DzInput` aliases for every component used in a Dynamic Zone. A Dynamic Zone input field is typed as `(BlockADzInput | BlockBDzInput | ...)[]` — each element requires `__component` so Strapi can route the block to the right component type:
 
 ```typescript
 await strapi.landings.create({
@@ -224,8 +239,8 @@ await strapi.landings.create({
 })
 ```
 
-::: warning
-Omitting the `__component` field when writing Dynamic Zone data will cause Strapi to reject the request. It is required for every block in the array.
+::: warning Dynamic Zone vs regular component attributes
+`__component` is required **only** for Dynamic Zone payloads. For a regular `type: "component"` attribute (single or repeatable), Strapi already knows the component type from the schema and will reject `__component` in the payload with a 400. The generator reflects this: `*Input` for a regular component field does not include `__component`, while `*DzInput` for a Dynamic Zone block does.
 :::
 
 When updating, you replace the entire Dynamic Zone array. Strapi does not support partial updates to individual blocks within a Dynamic Zone:

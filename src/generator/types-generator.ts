@@ -39,9 +39,28 @@ export class TypesGenerator {
             this.addComponentInterface(sf, component)
         }
 
+        // Dynamic-zone variants of component interfaces (with __component
+        // discriminator). Generated only for components actually used in
+        // any dynamic zone — Strapi rejects __component on regular component
+        // attributes, so the discriminator must live on the place of use, not
+        // on the component itself.
+        const dzComponentUids = this.collectDzComponentUids(schema)
+        for (const component of schema.components) {
+            if (dzComponentUids.has(component.uid)) {
+                this.addComponentDzAlias(sf, component)
+            }
+        }
+
         // Component Input interfaces
         for (const component of schema.components) {
             this.addComponentInputInterface(sf, component)
+        }
+
+        // Dynamic-zone Input variants
+        for (const component of schema.components) {
+            if (dzComponentUids.has(component.uid)) {
+                this.addComponentDzInputAlias(sf, component)
+            }
         }
 
         // Content type interfaces
@@ -291,7 +310,6 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
             isExported: true,
             properties: [
                 { name: 'id', type: 'number' },
-                { name: '__component', type: `'${component.uid}'` },
                 ...component.attributes.map(attr => ({
                     name: attr.name,
                     type: this.transformer.toTypeScript(
@@ -301,6 +319,40 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                 })),
             ],
         })
+    }
+
+    private addComponentDzAlias(sf: SourceFile, component: Component): void {
+        sf.addTypeAlias({
+            name: `${component.cleanName}Dz`,
+            isExported: true,
+            type: `${component.cleanName} & { __component: '${component.uid}' }`,
+        })
+    }
+
+    private addComponentDzInputAlias(
+        sf: SourceFile,
+        component: Component,
+    ): void {
+        sf.addTypeAlias({
+            name: `${component.cleanName}DzInput`,
+            isExported: true,
+            type: `${component.cleanName}Input & { __component: '${component.uid}' }`,
+        })
+    }
+
+    private collectDzComponentUids(schema: ParsedSchema): Set<string> {
+        const uids = new Set<string>()
+        for (const ct of schema.contentTypes) {
+            for (const dz of ct.dynamicZones) {
+                for (const uid of dz.components) uids.add(uid)
+            }
+        }
+        for (const comp of schema.components) {
+            for (const dz of comp.dynamicZones) {
+                for (const uid of dz.components) uids.add(uid)
+            }
+        }
+        return uids
     }
 
     private addComponentInputInterface(
@@ -313,7 +365,6 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
             isExported: true,
             properties: [
                 { name: 'id', type: 'number', hasQuestionToken: true },
-                { name: '__component', type: `'${component.uid}'` },
                 ...component.attributes.map(attr => ({
                     name: attr.name,
                     type: this.transformer.toTypeScript(attr.type, false),
@@ -343,7 +394,7 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                 }),
                 ...component.dynamicZones.map(dzField => ({
                     name: dzField.name,
-                    type: `(${dzField.componentTypes.map(ct => `${ct}Input`).join(' | ')})[] | null`,
+                    type: `(${dzField.componentTypes.map(ct => `${ct}DzInput`).join(' | ')})[] | null`,
                     hasQuestionToken: true,
                 })),
             ],
@@ -418,7 +469,7 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                 }),
                 ...contentType.dynamicZones.map(dzField => ({
                     name: dzField.name,
-                    type: `(${dzField.componentTypes.map(ct => `${ct}Input`).join(' | ')})[] | null`,
+                    type: `(${dzField.componentTypes.map(ct => `${ct}DzInput`).join(' | ')})[] | null`,
                     hasQuestionToken: true,
                 })),
             ],
@@ -607,7 +658,9 @@ ${perFieldPop}
         }
 
         for (const dzField of type.dynamicZones) {
-            const unionType = dzField.componentTypes.join(' | ')
+            const unionType = dzField.componentTypes
+                .map(ct => `${ct}Dz`)
+                .join(' | ')
             fields.push(`          ${dzField.name}?: (${unionType})[]`)
         }
 
@@ -649,7 +702,9 @@ ${perFieldPop}
         }
 
         for (const dzField of type.dynamicZones) {
-            const unionType = dzField.componentTypes.join(' | ')
+            const unionType = dzField.componentTypes
+                .map(ct => `${ct}Dz`)
+                .join(' | ')
             fields.push(
                 `            ${dzField.name}?: '${dzField.name}' extends Pop[number] ? (${unionType})[] : never`,
             )
@@ -711,15 +766,18 @@ ${perFieldPop}
             for (let i = 0; i < dzField.components.length; i++) {
                 const uid = dzField.components[i]
                 const cleanType = dzField.componentTypes[i]
+                const dzVariant = `${cleanType}Dz`
                 const hasPopulate = this.hasPopulatableFields(cleanType)
 
                 if (hasPopulate) {
-                    // Extract nested populate from on discriminator and recursively apply GetPayload
+                    // Extract nested populate from on discriminator and recursively apply GetPayload.
+                    // Populated branch: GetPayload result is intersected with the __component
+                    // discriminator so the resulting union still narrows in switch statements.
                     componentEntries.push(
-                        `(Pop['${dzField.name}'] extends { on: infer On } ? '${uid}' extends keyof On ? On['${uid}'] extends { populate: infer NestedPop } ? ${cleanType}GetPayload<{ populate: NestedPop }> : ${cleanType} : ${cleanType} : ${cleanType})`,
+                        `(Pop['${dzField.name}'] extends { on: infer On } ? '${uid}' extends keyof On ? On['${uid}'] extends { populate: infer NestedPop } ? (${cleanType}GetPayload<{ populate: NestedPop }> & { __component: '${uid}' }) : ${dzVariant} : ${dzVariant} : ${dzVariant})`,
                     )
                 } else {
-                    componentEntries.push(cleanType)
+                    componentEntries.push(dzVariant)
                 }
             }
             const dzType = `(${componentEntries.join(' | ')})[]`
