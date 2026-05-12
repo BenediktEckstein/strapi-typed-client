@@ -72,6 +72,10 @@ export default defineConfig({
                             link: '/advanced/custom-endpoints',
                         },
                         {
+                            text: 'Extending Payload Types',
+                            link: '/advanced/extending-payloads',
+                        },
+                        {
                             text: 'Plugin Config',
                             link: '/advanced/plugin-config',
                         },
