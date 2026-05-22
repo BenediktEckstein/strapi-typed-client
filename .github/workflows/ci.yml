@@ -1,17 +1,16 @@
-name: Publish to npm
+name: CI
 
 on:
-  release:
-    types: [published]
+  pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
-    environment: npm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -25,10 +24,11 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      - name: Lint
+        run: yarn lint
+
       - name: Build
         run: yarn build
 
-      - name: Publish
-        run: npx -y npm@latest publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ""
+      - name: Test
+        run: yarn test
