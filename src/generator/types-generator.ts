@@ -6,6 +6,7 @@ import {
     generateEntityFilters,
     generateTypedQueryParams,
 } from '../core/generator/filters-generator.js'
+import { capitalize, toCamelCase } from '../shared/index.js'
 
 export class TypesGenerator {
     private transformer: TypeTransformer
@@ -27,6 +28,8 @@ export class TypesGenerator {
             '// Auto-generated TypeScript types from Strapi schema',
             '// Do not edit manually',
         ])
+
+        this.addEnums(sf, schema)
 
         // Base types (static block)
         sf.addStatements(this.generateBaseTypes())
@@ -315,7 +318,10 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                     type: this.transformer.toTypeScript(
                         attr.type,
                         attr.required,
+                        component.cleanName,
+                        attr.name,
                     ),
+                    hasQuestionToken: attr.required !== true,
                 })),
             ],
         })
@@ -367,7 +373,12 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                 { name: 'id', type: 'number', hasQuestionToken: true },
                 ...component.attributes.map(attr => ({
                     name: attr.name,
-                    type: this.transformer.toTypeScript(attr.type, false),
+                    type: this.transformer.toTypeScript(
+                        attr.type,
+                        false,
+                        component.cleanName,
+                        attr.name,
+                    ),
                     hasQuestionToken: true,
                 })),
                 ...component.media.map(mediaField => ({
@@ -425,7 +436,10 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                     type: this.transformer.toTypeScript(
                         attr.type,
                         attr.required,
+                        contentType.cleanName,
+                        attr.name,
                     ),
+                    hasQuestionToken: attr.required !== true,
                 })),
             ],
         })
@@ -442,7 +456,12 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
             properties: [
                 ...contentType.attributes.map(attr => ({
                     name: attr.name,
-                    type: this.transformer.toTypeScript(attr.type, false),
+                    type: this.transformer.toTypeScript(
+                        attr.type,
+                        false,
+                        contentType.cleanName,
+                        attr.name,
+                    ),
                     hasQuestionToken: true,
                 })),
                 ...contentType.media.map(mediaField => ({
@@ -474,6 +493,68 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
                 })),
             ],
         })
+    }
+
+    private addEnums(sf: SourceFile, schema: ParsedSchema): void {
+        sf.addStatements([
+            '// ============================================',
+            '// Enum for contentTypes Names',
+            '// ============================================',
+        ])
+
+        // Generate enum with all content type names
+        if (schema.contentTypes.length > 0) {
+            sf.addEnum({
+                name: 'ContentTypeNamePlural',
+                isExported: true,
+                members: schema.contentTypes.map(ct => {
+                    const name = toCamelCase(
+                        ct.kind === 'single' ? ct.singularName : ct.pluralName,
+                    )
+                    return { name, value: name }
+                }),
+            })
+        }
+
+        sf.addStatements([
+            '// ============================================',
+            '// ContentType attribute Enums',
+            '// ============================================',
+        ])
+
+        for (const contentType of schema.contentTypes) {
+            for (const attribute of contentType.attributes) {
+                if (attribute.type.kind === 'enumeration') {
+                    sf.addEnum({
+                        name: `${contentType.cleanName}_${attribute.name}`,
+                        isExported: true,
+                        members: attribute.type.values.map(v => {
+                            return { name: capitalize(v), value: v }
+                        }),
+                    })
+                }
+            }
+        }
+
+        sf.addStatements([
+            '// ============================================',
+            '// Component attribute Enums',
+            '// ============================================',
+        ])
+
+        for (const ct of schema.components) {
+            for (const attribute of ct.attributes) {
+                if (attribute.type.kind === 'enumeration') {
+                    sf.addEnum({
+                        name: `${ct.cleanName}_${attribute.name}`,
+                        isExported: true,
+                        members: attribute.type.values.map(v => {
+                            return { name: v, value: v }
+                        }),
+                    })
+                }
+            }
+        }
     }
 
     private addPopulateParams(sf: SourceFile, schema: ParsedSchema): void {
@@ -608,8 +689,14 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
         const perFieldPop = this.buildPerFieldPopulate(type)
 
         return `// Payload type for ${name} with populate support
-export type ${name}GetPayload<P extends { populate?: ${name}PopulateParam | (keyof ${name}PopulateParam & string)[] | '*' | true } = {}> =
-  ${name} &
+export type ${name}GetPayload<P extends { populate?: ${name}PopulateParam | (keyof ${name}PopulateParam & string)[] | '*' | true , fields?: (keyof ${name})[] | '*' } = {}> =
+   (P extends { fields: infer F }
+    ? F extends '*'
+    ? ${name}
+    : F extends (keyof ${name})[]
+    ? Pick<${name}, F[number]>
+    : ${name}
+    : ${name}) &
   (P extends { populate: infer Pop }
     ? Pop extends '*' | true
       ? {

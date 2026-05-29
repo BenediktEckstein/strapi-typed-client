@@ -5,8 +5,13 @@ export class TypeTransformer {
     /**
      * Converts Strapi attribute type to TypeScript type string
      */
-    toTypeScript(attrType: AttributeType, required: boolean): string {
-        let tsType = this.getBaseType(attrType)
+    toTypeScript(
+        attrType: AttributeType,
+        required: boolean,
+        parentName: string,
+        attributeName: string,
+    ): string {
+        let tsType = this.getBaseType(attrType, parentName, attributeName)
 
         if (!required && !this.isAlwaysRequired(attrType)) {
             tsType += ' | null'
@@ -15,7 +20,11 @@ export class TypeTransformer {
         return tsType
     }
 
-    private getBaseType(attrType: AttributeType): string {
+    private getBaseType(
+        attrType: AttributeType,
+        parentName: string,
+        attributeName: string,
+    ): string {
         switch (attrType.kind) {
             case 'string':
             case 'text':
@@ -44,7 +53,8 @@ export class TypeTransformer {
                 return 'unknown'
 
             case 'enumeration':
-                return attrType.values.map(v => `'${v}'`).join(' | ')
+                return `${parentName}_${attributeName}`
+            // return attrType.values.map(v => `'${v}'`).join(' | ')
 
             case 'media':
                 return attrType.multiple ? 'MediaFile[]' : 'MediaFile'
