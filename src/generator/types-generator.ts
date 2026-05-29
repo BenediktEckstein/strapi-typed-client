@@ -6,7 +6,7 @@ import {
     generateEntityFilters,
     generateTypedQueryParams,
 } from '../core/generator/filters-generator.js'
-import { capitalize, toCamelCase } from '../shared/index.js'
+import { capitalize, toCamelCase, toLowerFirst } from '../shared/index.js'
 
 export class TypesGenerator {
     private transformer: TypeTransformer
@@ -522,14 +522,20 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
             '// ============================================',
         ])
 
+        const enumValueName = (name: string) =>
+            toCamelCase(name.replace(' ', '_').replaceAll(/_([A-U])/g, '$1'))
+
         for (const contentType of schema.contentTypes) {
             for (const attribute of contentType.attributes) {
                 if (attribute.type.kind === 'enumeration') {
                     sf.addEnum({
-                        name: `${contentType.cleanName}_${attribute.name}`,
+                        name: this.transformer.getEnumName(
+                            contentType.cleanName,
+                            attribute.name,
+                        ),
                         isExported: true,
                         members: attribute.type.values.map(v => {
-                            return { name: capitalize(v), value: v }
+                            return { name: enumValueName(v), value: v }
                         }),
                     })
                 }
@@ -546,10 +552,13 @@ type _ApplyFields<TFull, TBase, TEntry> = TEntry extends true ? TFull : TEntry e
             for (const attribute of ct.attributes) {
                 if (attribute.type.kind === 'enumeration') {
                     sf.addEnum({
-                        name: `${ct.cleanName}_${attribute.name}`,
+                        name: this.transformer.getEnumName(
+                            ct.cleanName,
+                            attribute.name,
+                        ),
                         isExported: true,
                         members: attribute.type.values.map(v => {
-                            return { name: v, value: v }
+                            return { name: enumValueName(v), value: v }
                         }),
                     })
                 }

@@ -1,5 +1,9 @@
 import { AttributeType } from '../schema-types.js'
-import { convertComponentName, toEndpointName } from '../shared/index.js'
+import {
+    convertComponentName,
+    toCamelCase,
+    toEndpointName,
+} from '../shared/index.js'
 
 export class TypeTransformer {
     /**
@@ -18,6 +22,10 @@ export class TypeTransformer {
         }
 
         return tsType
+    }
+
+    getEnumName(parentName: string, attributeName: string): string {
+        return `${parentName}_${toCamelCase(attributeName)}`
     }
 
     private getBaseType(
@@ -53,8 +61,7 @@ export class TypeTransformer {
                 return 'unknown'
 
             case 'enumeration':
-                return `${parentName}_${attributeName}`
-            // return attrType.values.map(v => `'${v}'`).join(' | ')
+                return this.getEnumName(parentName, attributeName)
 
             case 'media':
                 return attrType.multiple ? 'MediaFile[]' : 'MediaFile'
