@@ -4,7 +4,12 @@
  */
 
 import { Project } from 'ts-morph'
-import { ParsedSchema, ContentType, Attribute } from '../../schema-types.js'
+import {
+    ParsedSchema,
+    ContentType,
+    Attribute,
+    type Component,
+} from '../../schema-types.js'
 
 /**
  * Generate filter utility types (static block)
@@ -145,10 +150,22 @@ function getFilterTypeForAttribute(attr: Attribute): string {
     }
 }
 
+function getNameForUID(uid: string, schema: ParsedSchema): string {
+    const ct = schema.contentTypes.find(c => c.uid === uid)
+    if (ct) return ct.cleanName
+    const cp = schema.components.find(c => c.name === uid)
+    if (cp) return cp.cleanName
+    console.log(schema.components)
+    throw new Error(`No content type or component found for UID ${uid}`)
+}
+
 /**
  * Build filter interface properties for a content type
  */
-function buildFilterProperties(ct: ContentType) {
+function buildFilterProperties(
+    ct: ContentType | Component,
+    schema: ParsedSchema,
+) {
     return [
         {
             name: 'id',
@@ -165,11 +182,22 @@ function buildFilterProperties(ct: ContentType) {
             type: getFilterTypeForAttribute(attr),
             hasQuestionToken: true,
         })),
-        ...ct.relations.map(rel => ({
-            name: rel.name,
-            type: '{ id?: number | IdFilterOperators; documentId?: string | StringFilterOperators; [key: string]: any }',
-            hasQuestionToken: true,
-        })),
+        ...ct.relations.map(rel => {
+            const type = getNameForUID(rel.target, schema) + 'Filters'
+            return {
+                name: rel.name,
+                type,
+                hasQuestionToken: true,
+            }
+        }),
+        ...ct.components.map(rel => {
+            const type = getNameForUID(rel.componentType, schema) + 'Filters'
+            return {
+                name: rel.name,
+                type,
+                hasQuestionToken: true,
+            }
+        }),
         ...ct.media.map(media => ({
             name: media.name,
             type: '{ id?: number | IdFilterOperators; [key: string]: any }',
@@ -181,7 +209,10 @@ function buildFilterProperties(ct: ContentType) {
 /**
  * Generate filter interface for a single content type
  */
-export function generateEntityFilters(ct: ContentType): string {
+export function generateEntityFilters(
+    ct: ContentType | Component,
+    schema: ParsedSchema,
+): string {
     const project = new Project({ useInMemoryFileSystem: true })
     const sf = project.createSourceFile('filters.ts')
 
@@ -190,7 +221,7 @@ export function generateEntityFilters(ct: ContentType): string {
         isExported: true,
         extends: [`LogicalOperators<${ct.cleanName}Filters>`],
         docs: [`Type-safe filters for ${ct.cleanName}`],
-        properties: buildFilterProperties(ct),
+        properties: buildFilterProperties(ct, schema),
     })
 
     return sf.getFullText()
@@ -213,7 +244,7 @@ export function generateAllFilters(schema: ParsedSchema): string {
             isExported: true,
             extends: [`LogicalOperators<${ct.cleanName}Filters>`],
             docs: [`Type-safe filters for ${ct.cleanName}`],
-            properties: buildFilterProperties(ct),
+            properties: buildFilterProperties(ct, schema),
         })
     }
 

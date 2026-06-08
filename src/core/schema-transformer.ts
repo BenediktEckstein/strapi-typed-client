@@ -110,6 +110,7 @@ function transformContentType(uid: string, ct: StrapiContentType): ContentType {
 
     return {
         name: uidToInterfaceName(uid),
+        uid,
         cleanName,
         collectionName: ct.collectionName,
         singularName: ct.info.singularName,

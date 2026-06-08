@@ -90,7 +90,11 @@ export class TypesGenerator {
 
         // Entity-specific filters
         for (const contentType of schema.contentTypes) {
-            sf.addStatements(generateEntityFilters(contentType))
+            sf.addStatements(generateEntityFilters(contentType, schema))
+        }
+
+        for (const component of schema.components) {
+            sf.addStatements(generateEntityFilters(component, schema))
         }
 
         return sf.getFullText()
@@ -715,9 +719,9 @@ ${allPopFields}
         ? {
 ${arrayPopFields}
           }
-        : {
+        : 
 ${perFieldPop}
-          }
+    
     : {})`
     }
 
@@ -817,8 +821,9 @@ ${perFieldPop}
 
         for (const rel of type.relations) {
             const isNullable =
-                rel.relationType === 'oneToOne' ||
-                rel.relationType === 'manyToOne'
+                !rel.required &&
+                (rel.relationType === 'oneToOne' ||
+                    rel.relationType === 'manyToOne')
             const isArray =
                 rel.relationType === 'oneToMany' ||
                 rel.relationType === 'manyToMany'
@@ -826,26 +831,29 @@ ${perFieldPop}
             const nullSuffix = isNullable ? ' | null' : ''
             const arraySuffix = isArray ? '[]' : ''
             const hasPopulate = this.hasPopulatableFields(baseType)
+            // const optionalPrefix = rel.required || isArray ? '' : '?'
 
             const resolvedType = hasPopulate
                 ? `_ApplyFields<Pop['${rel.name}'] extends { populate: infer NestedPop } ? ${baseType}GetPayload<{ populate: NestedPop }> : ${baseType}, ${baseType}, Pop['${rel.name}']>${arraySuffix}${nullSuffix}`
                 : `_ApplyFields<${baseType}, ${baseType}, Pop['${rel.name}']>${arraySuffix}${nullSuffix}`
 
             fields.push(
-                `          ${rel.name}?: '${rel.name}' extends keyof Pop\n            ? ${resolvedType}\n            : never`,
+                `          ( '${rel.name}' extends keyof Pop\n      ? { ${rel.name}: ${resolvedType}} : {})`,
             )
         }
 
         for (const mediaField of type.media) {
             const arraySuffix = mediaField.multiple ? '[]' : ''
             fields.push(
-                `          ${mediaField.name}?: '${mediaField.name}' extends keyof Pop ? _ApplyFields<MediaFile, MediaFile, Pop['${mediaField.name}']>${arraySuffix} : never`,
+                `        ('${mediaField.name}' extends keyof Pop ? \n    {   ${mediaField.name}: _ApplyFields<MediaFile, MediaFile, Pop['${mediaField.name}']>${arraySuffix}} : {})`,
             )
         }
 
         for (const componentField of type.components) {
             const baseType = componentField.componentType
             const arraySuffix = componentField.repeatable ? '[]' : ''
+            const optionalPrefix =
+                componentField.required || componentField.repeatable ? '' : '?'
             const hasPopulate = this.hasPopulatableFields(baseType)
 
             const resolvedType = hasPopulate
@@ -853,7 +861,7 @@ ${perFieldPop}
                 : `_ApplyFields<${baseType}, ${baseType}, Pop['${componentField.name}']>${arraySuffix}`
 
             fields.push(
-                `          ${componentField.name}?: '${componentField.name}' extends keyof Pop\n            ? ${resolvedType}\n            : never`,
+                `         ( '${componentField.name}' extends keyof Pop\n     ? {${componentField.name}${optionalPrefix}: ${resolvedType}}  : {})`,
             )
         }
 
@@ -878,11 +886,11 @@ ${perFieldPop}
             }
             const dzType = `(${componentEntries.join(' | ')})[]`
             fields.push(
-                `          ${dzField.name}?: '${dzField.name}' extends keyof Pop ? ${dzType} : never`,
+                `          ( '${dzField.name}' extends keyof Pop\n      ? { ${dzField.name}: ${dzType}} : {})`,
             )
         }
 
-        return fields.join('\n')
+        return fields.join('\n&')
     }
 
     private hasAnyPopulatableFields(type: ContentType | Component): boolean {

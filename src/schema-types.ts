@@ -7,6 +7,7 @@ export interface ParsedSchema {
 
 export interface ContentType {
     name: string // e.g., "ApiItemItem"
+    uid: string // e.g., "api::item.item"
     cleanName: string // e.g., "Item"
     collectionName: string
     singularName: string // Strapi info.singularName, used as controller/endpoint for single types
