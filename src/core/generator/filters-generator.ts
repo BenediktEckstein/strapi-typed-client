@@ -22,21 +22,21 @@ export function generateFilterUtilityTypes(): string {
 // ============================================
 
 /** String filter operators */
-export interface StringFilterOperators {
-  $eq?: string
-  $eqi?: string
-  $ne?: string
-  $nei?: string
-  $in?: string[]
-  $notIn?: string[]
-  $contains?: string
-  $notContains?: string
-  $containsi?: string
-  $notContainsi?: string
-  $startsWith?: string
-  $startsWithi?: string
-  $endsWith?: string
-  $endsWithi?: string
+export interface StringFilterOperators<T extends string> {
+  $eq?: T
+  $eqi?: T
+  $ne?: T
+  $nei?: T
+  $in?: T[]
+  $notIn?: T[]
+  $contains?: T
+  $notContains?: T
+  $containsi?: T
+  $notContainsi?: T
+  $startsWith?: T
+  $startsWithi?: T
+  $endsWith?: T
+  $endsWithi?: T
   $null?: boolean
   $notNull?: boolean
 }
@@ -66,15 +66,15 @@ export interface BooleanFilterOperators {
 
 /** Date filter operators (dates are strings in Strapi) */
 export interface DateFilterOperators {
-  $eq?: string
-  $ne?: string
-  $lt?: string
-  $lte?: string
-  $gt?: string
-  $gte?: string
-  $in?: string[]
-  $notIn?: string[]
-  $between?: [string, string]
+  $eq?: string | Date
+  $ne?: string | Date
+  $lt?: string | Date
+  $lte?: string | Date
+  $gt?: string | Date
+  $gte?: string | Date
+  $in?: string | Date[]
+  $notIn?: string | Date[]
+  $between?: [string | Date, string | Date]
   $null?: boolean
   $notNull?: boolean
 }
@@ -159,7 +159,7 @@ function getFilterTypeForAttribute(
             return 'string | DateFilterOperators'
 
         case 'enumeration': {
-            return `${parentName}_${toCamelCase(attributeName)}`
+            return `${parentName}_${toCamelCase(attributeName)} | StringFilterOperators<${parentName}_${toCamelCase(attributeName)}>`
         }
 
         case 'json':
