@@ -716,9 +716,9 @@ export type ${name}GetPayload<P extends { populate?: ${name}PopulateParam | (key
 ${allPopFields}
         }
       : Pop extends readonly (infer _)[]
-        ? {
+        ? 
 ${arrayPopFields}
-          }
+          & {}
         : 
 ${perFieldPop}
     
@@ -733,27 +733,28 @@ ${perFieldPop}
 
         for (const rel of type.relations) {
             const isNullable =
-                rel.relationType === 'oneToOne' ||
-                rel.relationType === 'manyToOne'
+                !rel.required &&
+                (rel.relationType === 'oneToOne' ||
+                    rel.relationType === 'manyToOne')
             const isArray =
                 rel.relationType === 'oneToMany' ||
                 rel.relationType === 'manyToMany'
             const nullSuffix = isNullable ? ' | null' : ''
             const arraySuffix = isArray ? '[]' : ''
             fields.push(
-                `          ${rel.name}?: ${rel.targetType}${arraySuffix}${nullSuffix}`,
+                `          ${rel.name}: ${rel.targetType}${arraySuffix}${nullSuffix}`,
             )
         }
 
         for (const mediaField of type.media) {
             const mediaType = mediaField.multiple ? 'MediaFile[]' : 'MediaFile'
-            fields.push(`          ${mediaField.name}?: ${mediaType}`)
+            fields.push(`          ${mediaField.name}: ${mediaType}`)
         }
 
         for (const componentField of type.components) {
             const arraySuffix = componentField.repeatable ? '[]' : ''
             fields.push(
-                `          ${componentField.name}?: ${componentField.componentType}${arraySuffix}`,
+                `          ${componentField.name}: ${componentField.componentType}${arraySuffix}`,
             )
         }
 
@@ -761,7 +762,7 @@ ${perFieldPop}
             const unionType = dzField.componentTypes
                 .map(ct => `${ct}Dz`)
                 .join(' | ')
-            fields.push(`          ${dzField.name}?: (${unionType})[]`)
+            fields.push(`          ${dzField.name}: (${unionType})[]`)
         }
 
         return fields.join('\n')
@@ -775,29 +776,33 @@ ${perFieldPop}
 
         for (const rel of type.relations) {
             const isNullable =
-                rel.relationType === 'oneToOne' ||
-                rel.relationType === 'manyToOne'
+                !rel.required &&
+                (rel.relationType === 'oneToOne' ||
+                    rel.relationType === 'manyToOne')
             const isArray =
                 rel.relationType === 'oneToMany' ||
                 rel.relationType === 'manyToMany'
             const nullSuffix = isNullable ? ' | null' : ''
             const arraySuffix = isArray ? '[]' : ''
             fields.push(
-                `            ${rel.name}?: '${rel.name}' extends Pop[number] ? ${rel.targetType}${arraySuffix}${nullSuffix} : never`,
+                `          ( '${rel.name}' extends Pop[number] ? { ${rel.name}: ${rel.targetType}${arraySuffix}${nullSuffix}} : {})`,
             )
         }
 
         for (const mediaField of type.media) {
             const mediaType = mediaField.multiple ? 'MediaFile[]' : 'MediaFile'
             fields.push(
-                `            ${mediaField.name}?: '${mediaField.name}' extends Pop[number] ? ${mediaType} : never`,
+                `        ('${mediaField.name}' extends Pop[number] ? { ${mediaField.name}: ${mediaType} } : {})`,
             )
         }
 
         for (const componentField of type.components) {
             const arraySuffix = componentField.repeatable ? '[]' : ''
+            const optionalPrefix =
+                componentField.required || componentField.repeatable ? '' : '?'
+
             fields.push(
-                `            ${componentField.name}?: '${componentField.name}' extends Pop[number] ? ${componentField.componentType}${arraySuffix} : never`,
+                `         ( '${componentField.name}' extends Pop[number] ? {${componentField.name}${optionalPrefix}: ${componentField.componentType}${arraySuffix}}  : {})`,
             )
         }
 
@@ -806,11 +811,11 @@ ${perFieldPop}
                 .map(ct => `${ct}Dz`)
                 .join(' | ')
             fields.push(
-                `            ${dzField.name}?: '${dzField.name}' extends Pop[number] ? (${unionType})[] : never`,
+                `          ( '${dzField.name}' extends Pop[number] ? { ${dzField.name}: ${unionType}[]} : {})`,
             )
         }
 
-        return fields.join('\n')
+        return fields.join('\n&')
     }
 
     /**
