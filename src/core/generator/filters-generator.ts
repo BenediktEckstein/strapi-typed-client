@@ -3,11 +3,13 @@
  * Generates type-safe filter interfaces for Strapi entities
  */
 
+import { toCamelCase } from '../../shared/index.js'
+
 import { Project } from 'ts-morph'
 import {
-    ParsedSchema,
-    ContentType,
     Attribute,
+    ContentType,
+    ParsedSchema,
     type Component,
 } from '../../schema-types.js'
 
@@ -107,13 +109,32 @@ export interface LogicalOperators<T> {
   $or?: T[]
   $not?: T
 }
+
+/** Content base filters */
+export interface ContentBaseFilters {
+  id?: number | IdFilterOperators;
+  documentId?: string | StringFilterOperators;
+  updated_at?: DateFilterOperators;
+  created_at?: DateFilterOperators;
+  published_at?: DateFilterOperators;
+}
+
+/** Component base filters */
+export interface ComponentBaseFilters {
+  id?: number | IdFilterOperators;
+}
+
 `
 }
 
 /**
  * Get the filter type for an attribute
  */
-function getFilterTypeForAttribute(attr: Attribute): string {
+function getFilterTypeForAttribute(
+    attr: Attribute,
+    parentName: string,
+    attributeName: string,
+): string {
     const type = attr.type
 
     switch (type.kind) {
@@ -138,8 +159,7 @@ function getFilterTypeForAttribute(attr: Attribute): string {
             return 'string | DateFilterOperators'
 
         case 'enumeration': {
-            const enumValues = type.values.map(v => `'${v}'`).join(' | ')
-            return `(${enumValues}) | StringFilterOperators`
+            return `${parentName}_${toCamelCase(attributeName)}`
         }
 
         case 'json':
@@ -167,19 +187,9 @@ function buildFilterProperties(
     schema: ParsedSchema,
 ) {
     return [
-        {
-            name: 'id',
-            type: 'number | IdFilterOperators',
-            hasQuestionToken: true,
-        },
-        {
-            name: 'documentId',
-            type: 'string | StringFilterOperators',
-            hasQuestionToken: true,
-        },
         ...ct.attributes.map(attr => ({
             name: attr.name,
-            type: getFilterTypeForAttribute(attr),
+            type: getFilterTypeForAttribute(attr, ct.cleanName, attr.name),
             hasQuestionToken: true,
         })),
         ...ct.relations.map(rel => {
@@ -216,10 +226,13 @@ export function generateEntityFilters(
     const project = new Project({ useInMemoryFileSystem: true })
     const sf = project.createSourceFile('filters.ts')
 
+    const baseType =
+        'kind' in ct ? 'ContentBaseFilters' : 'ComponentBaseFilters'
+
     sf.addInterface({
         name: `${ct.cleanName}Filters`,
         isExported: true,
-        extends: [`LogicalOperators<${ct.cleanName}Filters>`],
+        extends: [`LogicalOperators<${ct.cleanName}Filters>`, baseType],
         docs: [`Type-safe filters for ${ct.cleanName}`],
         properties: buildFilterProperties(ct, schema),
     })
